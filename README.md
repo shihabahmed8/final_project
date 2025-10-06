@@ -148,7 +148,6 @@ produce_quality_ready/
    pip install streamlit
    ```
 3. Run Predictions with Pretrained Model:
-   Run:
    ```bash
   python src/predict.py --image sample.jpg --fruit banana --temp 28
    ```
