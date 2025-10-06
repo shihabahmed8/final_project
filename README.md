@@ -149,6 +149,7 @@ produce_quality_ready/
    ```
 3. Run Predictions with Pretrained Model:
    ```bash
+   
   python src/predict.py --image sample.jpg --fruit banana --temp 28
    ```
 4. Run the dashboard:
