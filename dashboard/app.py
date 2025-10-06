@@ -148,7 +148,6 @@ def _predict_from_bytes(img_bytes: bytes, tta: bool=False, topk: int=3):
 
 @torch.no_grad()
 def _predict_tensor(x, tta=False):
-    
     model, _ = _load_model_and_tfms()
     y1 = model(x)
     if tta:
@@ -160,174 +159,139 @@ def _predict_tensor(x, tta=False):
     idx = int(p.argmax().item())
     return idx, p.cpu().numpy()
 
-def predict_pil(img: Image.Image, tta=False, topk=3):
-    
-    buf = io.BytesIO()
-   
-    img.convert("RGB").save(buf, format="PNG")
-    label, top = _predict_from_bytes(buf.getvalue(), tta=tta, topk=topk)
-    return label, top
-# ----------------- [END STEP 1] -----------------
+# ================= UI & State Setup =================
+st.set_page_config(page_title="Produce Quality Dashboard", layout="wide", initial_sidebar_state="collapsed")
+st.markdown("## Produce Quality Dashboard")
+st.caption("Auto prediction (upload / camera) with freshness heuristics.")
 
-
-# ----------------- UI -----------------
-st.set_page_config(page_title="Produce Quality Dashboard", layout="wide")
-st.title(" Produce Quality Dashboard")
-
-with st.sidebar.expander("Debug", expanded=False):
-    st.caption(f"DB used by db_utils: {db_utils.DB_FILE}")
-    st.caption(f"db_utils file: {db_utils.__file__}")
-    st.caption(f"has insert_quality? {hasattr(db_utils, 'insert_quality')}")
-    st.caption(f"has insert_shelf? {hasattr(db_utils, 'insert_shelf')}")
-
-st.sidebar.subheader("Add a new scan")
-uploaded = st.sidebar.file_uploader("Upload JPEG/PNG", type=["jpg","jpeg","png"], key="file_upl")
-item = st.sidebar.text_input("Item name", value="Banana", key="item_name").strip()
-
-# ====== Main area capture section (repositioned) ======
-st.markdown("### Capture / Camera")
-cap_col1, cap_col2, cap_col3 = st.columns([2,1,1])
-with cap_col1:
-    use_browser_cam = st.toggle("Use browser camera", value=False, help="Use Streamlit's camera widget (may need Chrome/Edge)")
-with cap_col2:
-    opencv_btn = st.button("Capture via OpenCV", help="Single frame using system camera (fallback if browser camera fails)")
-with cap_col3:
-    clear_cam = st.button("Clear capture")
-
-camera_image = None
-if use_browser_cam:
-    camera_image = st.camera_input("Take a picture", key="camera_input_main")
-
-# OpenCV fallback capture
-if opencv_btn:
-    try:
-        import cv2
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        ok, frame = cap.read()
-        cap.release()
-        if ok:
-            import cv2 as _cv2
-            _ok, buf = _cv2.imencode('.png', frame)
-            if _ok:
-                st.session_state['opencv_capture'] = buf.tobytes()
-                st.success("OpenCV frame captured.")
-            else:
-                st.error("Failed to encode frame.")
-        else:
-            st.error("Could not read from camera (OpenCV). Close other apps using the camera.")
-    except Exception as e:
-        st.error(f"OpenCV capture error: {e}")
-
-if clear_cam:
-    st.session_state.pop('opencv_capture', None)
-    st.experimental_rerun()
-
-opencv_bytes = st.session_state.get('opencv_capture')
-
-# Determine active input content in priority order: browser cam > opencv fallback > upload
-input_content = None
-input_name = None
-use_camera = False  # keep variable used later for saving flow
-if camera_image is not None:
-    input_content = camera_image.getvalue()
-    input_name = f"browsercam_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
-    use_camera = True
-elif opencv_bytes:
-    input_content = opencv_bytes
-    input_name = f"opencv_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
-    use_camera = True
-elif uploaded is not None:
-    input_content = uploaded.read()
-    input_name = uploaded.name
-
-
-# --- Step 3: sidebar controls (TTA + Top-K) ---
-use_tta = st.sidebar.checkbox("Use TTA (flip)", value=False)
-topk = st.sidebar.slider(
-    "Top-K",
-    min_value=1,
-    max_value=len(CLASS_NAMES),
-    value=min(3, len(CLASS_NAMES)),
-    step=1,
+# Compact metric font sizing
+st.markdown(
+    """
+    <style>
+    /* Reduce metric label & value sizes */
+    [data-testid='stMetric'] div:first-child { font-size:0.68rem; letter-spacing:.5px; text-transform:uppercase; opacity:.75; }
+    [data-testid='stMetricValue'] { font-size:1.25rem; font-weight:600; }
+    /* If value is long, constrain and add ellipsis */
+    [data-testid='stMetricValue'] { max-width:110px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:inline-block; }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
-
 
 if "data_ver" not in st.session_state:
     st.session_state["data_ver"] = 0
+for k in ["last_pred","last_image_bytes","last_image_path","last_opencv"]:
+    st.session_state.setdefault(k, None)
 
+# Create tabs
+tab_predict, tab_analytics, tab_gallery, tab_admin, tab_debug = st.tabs([
+    "🔮 Predict", "📈 Analytics", "🖼 Gallery", "🛠 Admin", "🐞 Debug"
+])
 
-
-def save_uploaded(file, item_name):
-    data_dir = BASE / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    content = file.read()
-    h = hashlib.sha1(content).hexdigest()[:12]
-    ext = os.path.splitext(file.name)[1].lower() or ".jpg"
-    safe_item = (item_name or "item").strip().replace(" ", "_")
-    out_path = data_dir / f"{safe_item}_{h}{ext}"
-    with open(out_path, "wb") as f:
-        f.write(content)
-    return out_path, content
-
-
-
-if input_content and item:
-    # If camera (browser or opencv), save deterministic name
-    if use_camera:
-        data_dir = BASE / "data"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        h = hashlib.sha1(input_content).hexdigest()[:12]
-        ext = ".png"
-        out_path = data_dir / f"{item}_{h}{ext}"
-        with open(out_path, "wb") as f:
-            f.write(input_content)
-        content = input_content
-    else:
-        if uploaded is not None:
-            uploaded.seek(0)
-            out_path, content = save_uploaded(uploaded, item)
-        else:
-            content = None
-            out_path = None
-
-    
-    with st.spinner("Running prediction…"):
-        label, top = _predict_from_bytes(content, tta=use_tta, topk=topk)
-
-    
-    st.subheader("Prediction")
-    c1, c2 = st.columns([1, 2])
+with tab_predict:
+    import plotly.graph_objects as go
+    c1, c2, c3, c4 = st.columns([2,1.2,1,1])
     with c1:
-        st.image(Image.open(io.BytesIO(content)), caption=item, use_container_width=True)
+        item = st.text_input("Item name", value="Banana").strip()
     with c2:
-        st.metric("Class", label)
-        st.table(pd.DataFrame({
-            "class": [k for k, _ in top],
-            "prob":  [f"{v*100:.2f}%" for _, v in top]
-        }))
+        topk = st.slider("Top-K", 1, len(CLASS_NAMES), min(3, len(CLASS_NAMES)))
+    with c3:
+        use_tta = st.toggle("TTA", value=False)
+    with c4:
+        capture_mode = st.selectbox("Source", ["Upload","Browser Cam","OpenCV"], index=0)
 
-    # --- persist to DB ---
-    precomputed = {
-        "label": label,
-        "top": [(k, float(v)) for k, v in top],
-    }
-    res = process_and_insert(str(out_path), item_name=item, precomputed=precomputed)
+    left_col, right_col = st.columns([1,1.4])
+    input_content = None
+    if capture_mode == "Upload":
+        up = left_col.file_uploader("Upload JPEG/PNG", type=["jpg","jpeg","png"], key="upl_main")
+        if up: input_content = up.read()
+    elif capture_mode == "Browser Cam":
+        cam_img = left_col.camera_input("Browser Camera", key="browser_cam")
+        if cam_img: input_content = cam_img.getvalue()
+    else:
+        if left_col.button("🎥 Capture via OpenCV", key="opencv_btn"):
+            try:
+                import cv2
+                cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+                ok, frame = cap.read(); cap.release()
+                if ok:
+                    import cv2 as _cv2
+                    _ok, buf = _cv2.imencode('.png', frame)
+                    if _ok:
+                        st.session_state['last_opencv'] = buf.tobytes()
+                        input_content = st.session_state['last_opencv']
+                        left_col.success("Captured.")
+                    else:
+                        left_col.error("Encode failed.")
+                else:
+                    left_col.error("Camera busy / inaccessible.")
+            except Exception as e:
+                left_col.error(f"OpenCV error: {e}")
+        if input_content is None:
+            input_content = st.session_state.get('last_opencv')
 
-    st.sidebar.success(
-        f'Inserted sample_id={res["sample_id"]} | class={res["quality_class"]} | FI={res["freshness_index"]}'
-    )
+    new_hash = None
+    if input_content:
+        new_hash = hashlib.sha1(input_content).hexdigest()
+        left_col.image(input_content, caption=f"Input {new_hash[:8]}", use_container_width=True)
 
-    
-    st.session_state["data_ver"] += 1
+    trigger = False
+    if input_content and item:
+        last_path = st.session_state.get('last_image_path')
+        last_hash = None
+        if last_path:
+            try: last_hash = Path(last_path).stem.split('_')[-1]
+            except Exception: pass
+        if (new_hash and new_hash != last_hash) or st.session_state.get('last_pred') is None:
+            trigger = True
 
+    if trigger:
+        data_dir = BASE / 'data'; data_dir.mkdir(exist_ok=True, parents=True)
+        out_path = data_dir / f"{item}_{new_hash[:12]}.png"
+        with open(out_path,'wb') as f: f.write(input_content)
+        with st.spinner("Predicting..."):
+            label, top = _predict_from_bytes(input_content, tta=use_tta, topk=topk)
+        precomputed = {"label": label, "top": [(k,float(v)) for k,v in top]}
+        res = process_and_insert(str(out_path), item_name=item, precomputed=precomputed)
+        st.session_state.update({
+            'data_ver': st.session_state['data_ver'] + 1,
+            'last_pred': (label, top, res),
+            'last_image_bytes': input_content,
+            'last_image_path': str(out_path)
+        })
 
+    if st.session_state.get('last_pred'):
+        label, top, res = st.session_state['last_pred']
+        m1, m2, m3, m4 = right_col.columns(4)
+        m1.metric("Class", label)
+        m2.metric("FI", f"{res['freshness_index']:.2f}")
+        m3.metric("Conf", f"{top[0][1]*100:.1f}%")
+        m4.metric("ID", res['sample_id'])
+        prob_df = pd.DataFrame({"class":[k for k,_ in top], "prob":[float(v) for _,v in top]}).sort_values('prob')
+        fig = go.Figure()
+        fig.add_bar(x=prob_df.prob*100, y=prob_df['class'], orientation='h', marker=dict(color='rgba(16,185,129,0.75)'))
+        fig.update_layout(height=250, margin=dict(l=10,r=10,t=30,b=10), xaxis=dict(range=[0,100], title='Probability (%)'))
+        right_col.plotly_chart(fig, use_container_width=True)
+        # Show probabilities with a % suffix for readability
+        right_col.dataframe(
+            prob_df.sort_values('prob', ascending=False)
+                   .assign(prob_pct=lambda d: (d.prob*100).round(2).astype(str) + '%')
+                   .drop(columns=['prob'])
+                   .rename(columns={'prob_pct':'probability'}),
+            use_container_width=True,
+            height=170
+        )
+        with right_col.expander("Details", expanded=False):
+            st.json(res)
 
-st.subheader("Filters")
-with st.container():
+with tab_analytics:
+    st.markdown("### Dataset / Prediction Metrics")
     conn = sqlite3.connect(str(DB_FILE))
     df_items = pd.read_sql_query("SELECT DISTINCT item_name FROM Produce_Samples ORDER BY item_name", conn)
     item_opts = ["(All)"] + df_items["item_name"].dropna().tolist()
-    sel_item = st.selectbox("Item name", item_opts, index=0)
+    filt_col1, filt_col2 = st.columns([1,2])
+    with filt_col1:
+        sel_item = st.selectbox("Filter item", item_opts, index=0)
     if sel_item == "(All)":
         q = """
         SELECT s.sample_id, s.item_name, s.scan_date, s.image_path,
@@ -348,146 +312,125 @@ with st.container():
         """
         df = pd.read_sql_query(q, conn, params=[sel_item])
     conn.close()
-
-left, right = st.columns(2)
-with left:
-    st.subheader("Quality Class Distribution")
-    if len(df):
-        fig = px.pie(df, names="quality_class", hole=0.35)
-        st.plotly_chart(fig, use_container_width=True)
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Quality Class Distribution")
+        if len(df):
+            fig = px.pie(df, names="quality_class", hole=0.35)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No data yet.")
+    with right:
+        st.subheader("Average Freshness Index")
+        if len(df) and "freshness_index" in df:
+            st.metric("Average FI", f"{df['freshness_index'].mean():.2f}")
+        else:
+            st.metric("Average FI", "—")
+    st.markdown("### Recent Scans")
+    df_all = load_df(st.session_state["data_ver"])
+    df_latest = make_df_latest(df_all) if len(df_all) else pd.DataFrame()
+    if len(df_latest):
+        cols_show = [c for c in ["sample_id","item_name","scan_date","quality_class","confidence","freshness_index"] if c in df_latest.columns]
+        st.dataframe(df_latest[cols_show], use_container_width=True, height=320)
     else:
-        st.info("No data yet.")
+        st.info("No scans yet.")
 
-with right:
-    st.subheader("Average Freshness Index")
-    if len(df) and "freshness_index" in df:
-        st.metric("Average FI", f"{df['freshness_index'].mean():.2f}")
-    else:
-        st.metric("Average FI", "—")
-
-
-
-st.subheader("Recent Scans")
-
-
-df_all = load_df(st.session_state["data_ver"])
-
-if len(df_all):
-    df_latest = make_df_latest(df_all)
-else:
-    df_latest = pd.DataFrame()
-
-if len(df_latest):
-    cols_show = ["sample_id", "item_name", "scan_date", "quality_class", "confidence", "freshness_index"]
-    cols_show = [c for c in cols_show if c in df_latest.columns]
-    st.dataframe(df_latest[cols_show], use_container_width=True, height=300)
-else:
-    st.info("No scans yet.")
-
-
-
-st.subheader("Gallery")
-
-if len(df_latest):
-    cols = st.columns(4)
-    for i, (_, row) in enumerate(df_latest.head(24).iterrows()):
-        with cols[i % 4]:
-            img_path = None
-            if "image_path" in row.index and pd.notna(row["image_path"]):
-                raw = str(row["image_path"]).strip()
-                if raw:
-                    p = Path(raw).expanduser()
+with tab_gallery:
+    st.markdown("### Gallery")
+    df_all = load_df(st.session_state["data_ver"])
+    df_latest = make_df_latest(df_all) if len(df_all) else pd.DataFrame()
+    if len(df_latest):
+        cols = st.columns(6)
+        for i, (_, row) in enumerate(df_latest.head(36).iterrows()):
+            with cols[i % 6]:
+                img_path = None
+                if "image_path" in row.index and pd.notna(row["image_path"]):
+                    raw = str(row["image_path"]).strip(); p = Path(raw)
                     img_path = p if p.is_absolute() else (BASE / raw)
+                if img_path and img_path.exists():
+                    st.image(str(img_path), use_container_width=True)
+                    st.caption(f"#{row.get('sample_id','-')} • {row.get('item_name','-')} — {row.get('quality_class','-')}")
+                else:
+                    st.caption(f"#{row.get('sample_id','-')} (missing image)")
+    else:
+        st.info("No images yet.")
 
-            if img_path and img_path.exists():
-                st.image(str(img_path), use_container_width=True)
-                st.caption(
-                    f"#{row.get('sample_id','-')} • {row.get('item_name','-')} — "
-                    f"{row.get('quality_class','-')} | FI={row.get('freshness_index','-')}"
-                )
-            elif img_path:
-                st.caption(
-                    f"(image missing on disk) — "
-                    f"#{row.get('sample_id','-')} • {row.get('item_name','-')}"
-                )
-            else:
-                st.caption("(no image_path)")
-else:
-    st.info("No images yet.")
-
-
-
-st.sidebar.subheader("Delete saved fruits")
-del_item = st.sidebar.selectbox("Select item to delete", ["(None)"] + (df_items["item_name"].dropna().tolist() if len(df_items) else []))
-del_files = st.sidebar.checkbox("Also remove image files from disk", value=False)
-confirm = st.sidebar.text_input("Type DELETE to confirm", value="")
-if st.sidebar.button("Delete selected item") and del_item != "(None)" and confirm == "DELETE":
-    with sqlite3.connect(str(DB_FILE)) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT sample_id, image_path FROM Produce_Samples WHERE item_name=?", (del_item,))
-        rows = cur.fetchall()
-    db_utils.delete_item(del_item)
-    if del_files:
-        for _, ipath in rows:
-            p = (BASE / ipath) if not str(ipath).startswith(str(BASE)) else Path(ipath)
-            try:
-                if p.exists():
-                    p.unlink()
-            except Exception:
-                pass
-    st.sidebar.success(f"Deleted all '{del_item}' samples.")
-   
-    st.session_state["data_ver"] += 1
-
-
-
-import shutil
-
-st.sidebar.subheader("Admin / Danger zone")
-
-with st.sidebar.expander("Reset all data", expanded=False):
-    try:
-        conn = sqlite3.connect(str(DB_FILE))
-        counts = pd.read_sql_query("""
-            SELECT 'Produce_Samples' AS table_name, COUNT(*) AS cnt FROM Produce_Samples
-            UNION ALL
-            SELECT 'Quality_Results' AS table_name, COUNT(*) AS cnt FROM Quality_Results
-        """, conn)
-        conn.close()
-        st.caption(counts.to_string(index=False))
-    except Exception as e:
-        st.caption(f"(info) {e}")
-
-    also_remove_images = st.checkbox("Also remove image files from disk (data/)",
-                                     value=False, key="wipe_images_all")
-
-    if st.button("⚠️ Reset database", type="secondary"):
-        try:
-            conn = sqlite3.connect(str(DB_FILE))
-            cur = conn.cursor()
-            cur.execute("DELETE FROM Quality_Results;")
-            cur.execute("DELETE FROM Produce_Samples;")
-            cur.execute("DELETE FROM sqlite_sequence WHERE name IN ('Produce_Samples','Quality_Results');")
-            conn.commit()
-            cur.execute("VACUUM;")
-            conn.commit()
-            conn.close()
-
+with tab_admin:
+    st.markdown("### Admin & Maintenance")
+    conn = sqlite3.connect(str(DB_FILE))
+    df_items = pd.read_sql_query("SELECT DISTINCT item_name FROM Produce_Samples ORDER BY item_name", conn)
+    conn.close()
+    del_cols = st.columns([2,1,1,1])
+    with del_cols[0]:
+        del_item = st.selectbox("Delete item", ["(None)"] + df_items["item_name"].dropna().tolist())
+    with del_cols[1]:
+        del_files = st.checkbox("Remove images", value=False)
+    with del_cols[2]:
+        confirm = st.text_input("Type DELETE", value="")
+    with del_cols[3]:
+        if st.button("Delete", type="secondary") and del_item != "(None)" and confirm == "DELETE":
+            with sqlite3.connect(str(DB_FILE)) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT sample_id, image_path FROM Produce_Samples WHERE item_name=?", (del_item,))
+                rows = cur.fetchall()
+            db_utils.delete_item(del_item)
             removed = 0
-            if also_remove_images:
-                data_dir = BASE / "data"
-                if data_dir.exists():
-                    for p in data_dir.iterdir():
-                        try:
-                            if p.is_file():
-                                p.unlink()
-                                removed += 1
-                            elif p.is_dir():
-                                shutil.rmtree(p, ignore_errors=True)
-                        except Exception:
-                            pass
-
-            st.sidebar.success(f"Database cleared. Removed {removed} image file(s).")
+            if del_files:
+                for _, ipath in rows:
+                    p = (BASE / ipath) if not str(ipath).startswith(str(BASE)) else Path(ipath)
+                    try:
+                        if p.exists():
+                            p.unlink(); removed += 1
+                    except Exception:
+                        pass
+            st.success(f"Deleted '{del_item}' (images removed={removed}).")
             st.session_state["data_ver"] += 1
-        except Exception as e:
-            st.sidebar.error(f"Reset failed: {e}")
+    with st.expander("Reset ALL data", expanded=False):
+        also_remove_images = st.checkbox("Also remove images (data/)", value=False)
+        if st.button("⚠️ Reset database", type="secondary"):
+            try:
+                with sqlite3.connect(str(DB_FILE)) as conn:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM Quality_Results;")
+                    cur.execute("DELETE FROM Produce_Samples;")
+                    cur.execute("DELETE FROM sqlite_sequence WHERE name IN ('Produce_Samples','Quality_Results');")
+                    conn.commit(); cur.execute("VACUUM;"); conn.commit()
+                removed = 0
+                if also_remove_images:
+                    data_dir = BASE / "data"
+                    if data_dir.exists():
+                        for p in data_dir.iterdir():
+                            try:
+                                if p.is_file(): p.unlink(); removed += 1
+                            except Exception: pass
+                st.warning(f"Database cleared. Removed {removed} image(s).")
+                st.session_state["data_ver"] += 1
+            except Exception as e:
+                st.error(f"Reset failed: {e}")
+
+with tab_debug:
+    st.markdown("### Debug Info")
+    st.caption(f"DB File: {db_utils.DB_FILE}")
+    st.caption(f"db_utils path: {db_utils.__file__}")
+    st.caption(f"Has insert_quality? {hasattr(db_utils, 'insert_quality')}")
+    st.caption(f"Has insert_shelf? {hasattr(db_utils, 'insert_shelf')}")
+    st.caption(f"Data version: {st.session_state['data_ver']}")
+    st.caption(f"Last image saved: {st.session_state.get('last_image_path')}")
+
+
+
+def save_uploaded(file, item_name):
+    data_dir = BASE / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    content = file.read()
+    h = hashlib.sha1(content).hexdigest()[:12]
+    ext = os.path.splitext(file.name)[1].lower() or ".jpg"
+    safe_item = (item_name or "item").strip().replace(" ", "_")
+    out_path = data_dir / f"{safe_item}_{h}{ext}"
+    with open(out_path, "wb") as f:
+        f.write(content)
+    return out_path, content
+
+
+
+import shutil  # retained for admin operations (used in admin tab)

@@ -1,42 +1,31 @@
 
-# 🥦 Produce Quality Dashboard
+# Produce Quality Dashboard
 
-## 📌 Project Overview
-This project focuses on building a **machine learning system** to classify and predict the quality/readiness of vegetables using **image datasets** and training models. The system supports both:
-- **Manual image upload** for prediction.
-- **Live image capture** from the camera for real-time prediction.
+Real‑time produce quality / ripeness prediction using a fine‑tuned EfficientNet model. Supports upload, browser camera snapshot, and OpenCV capture with automatic database logging and lightweight analytics.
 
 ---
-## About Dataset
+## 📂 Dataset (Summary)
+- ~11,805 images (5 classes)
+- Split concept: ~80% train / ~20% test
+- Image size normalized to 224×224
+- Classes stored in `models/class_names.json`
 
-Total number of images: 11805.
-Training set size: 80% images.
-Test set size: 20% images (one fruit or vegetable per image).
-Number of classes: 5 
-Image size: 224×224 pixels.
+## ⚙️ Stack
+Python, PyTorch, Streamlit, OpenCV, Pillow, Pandas, NumPy, Plotly, SQLite.
 
-## ⚙️ Tools & Technologies
-- **Python 3.12 / 3.13**
-- **Jupyter Notebook** (exploration, preprocessing, model training & testing)
-- **VS Code** (modular project development, packaging, integration)
-- **PyTorch** (model building & training)
-- **OpenCV / Pillow** (image preprocessing & capture)
-- **Matplotlib & Seaborn** (visualization)
-- **Pandas & NumPy** (data handling)
-- **Streamlit** (for dashboard / web integration)
-- **Git & GitHub** (version control & submission)
+## ✨ Key Features
+| Feature | Description |
+|---------|-------------|
+| Image upload | Predict class + probability + freshness index |
+| Browser camera | One‑shot capture via `st.camera_input` |
+| OpenCV fallback | Single frame capture if browser permission fails |
+| Live loop script | `scripts/camera_predict.py` overlays predictions on video |
+| DB logging | Saves sample, class, confidence, freshness index |
+| Hash dedupe | Prevents duplicate storage of same image bytes |
+| Analytics | Class distribution + average freshness + recent scans |
+| Admin ops | Delete item set / reset entire database |
 
----
-
-## 🧑‍💻 Workflow & Steps
-# 🥦 Produce Quality Quality / Ripeness Prediction Dashboard
-
-Real-time and batch prediction system for produce (e.g., bananas) quality / ripeness using a PyTorch EfficientNet model plus heuristic color analysis for derived freshness metrics. Includes:
-
-* Streamlit dashboard (upload + camera + DB visualization)
-* OpenCV live camera prediction script
-* Training & preprocessing utilities
-* SQLite persistence of scans and model outputs
+## 🧱 Project Structure
 
 ---
 ## 📌 Key Features
@@ -80,20 +69,11 @@ final_project/
 ```
 
 ---
-## 🧪 Classes / Targets
-Currently configured (example) classes (see `class_names.json`):
-`["Unripe", "Perfectly Ripe", "Overripe", "Bruised/Damaged", "Healthy Leaf"]`
-
-Freshness index & shelf-life heuristics are derived in `pipeline.py`.
+## 🧪 Classes
+See `class_names.json`. Freshness index (simple heuristic) calculated in `pipeline.py`.
 
 ---
-## 📊 Dataset (Summary)
-* ~11.8K images
-* 80/20 (train/test) conceptually; validation derived in training script
-* Normalized to 224×224 for EfficientNet/MobileNet
-
----
-## 🛠 Environment Setup (Windows PowerShell)
+## 🛠 Setup (Windows PowerShell)
 ```powershell
 cd path\to\final_project
 py -3.13 -m venv .venv
@@ -111,7 +91,7 @@ pip install -r requirements.txt --no-deps
 ```
 
 ---
-## 🏋️ Training (Example MobileNet)
+## 🏋️ Training (Example)
 Ensure your CSV / image layout matches expectations in `train_banana.py`, then:
 ```powershell
 python src\train_banana.py
@@ -119,85 +99,33 @@ python src\train_banana.py
 Model artifacts will be saved into `models/`.
 
 ---
-## 🚀 Running the Dashboard
+## 🚀 Run the Dashboard
 ```powershell
 streamlit run dashboard/app.py
 ```
 Open: http://localhost:8501
 
-### Dashboard Inputs
-1. Upload: Choose a file in sidebar.
-2. Camera options (main page section "Capture / Camera"):
-   * Toggle "Use browser camera" → take snapshot (requires browser permission).
-   * Button "Capture via OpenCV" → grabs a single frame (fallback if browser capture fails).
-3. Upon capture or upload + item name, prediction runs automatically and is inserted into DB.
+### Inputs
+1. Upload file (JPEG/PNG)
+2. Browser camera snapshot
+3. OpenCV single capture button
+Prediction fires automatically when a new image + item name are present.
 
-### Output Panels
-* Prediction (top‑K table + class metric)
-* Distribution & Freshness metrics
-* Recent scans table + Gallery
-* Admin tools (delete items / reset database)
+### Outputs
+Prediction metrics, probability bar/table, class distribution pie, average freshness, recent scans, gallery, admin & debug info.
 
 ---
-## 🎥 Stand‑Alone Live Camera (Continuous)
-```powershell
-python scripts\camera_predict.py            # default camera index 0
-python scripts\camera_predict.py --camera 1 # alternate camera
-python scripts\camera_predict.py --device cuda  # if GPU available
-```
-Controls in window:
-* q / ESC → quit
-* c → save frame only
-* s → save + insert prediction into DB (requires working pipeline/model)
+## ✅ Completed
+Dataset prep, preprocessing, model fine‑tune, upload + camera prediction, OpenCV script, DB logging, analytics tabs, admin actions.
 
 ---
-## � Database
-SQLite file: `db/produce.db`
-Tables (simplified):
-* `Produce_Samples(sample_id, item_name, scan_date, image_path, ...)`
-* `Quality_Results(result_id, sample_id, quality_class, confidence, freshness_index, ...)`
-Insert flow handled in `pipeline.process_and_insert()`.
-
----
-## 🔍 Troubleshooting
-| Issue | Fix |
-|-------|-----|
-| `ModuleNotFoundError: numpy` | Activate venv; run `pip install -r requirements.txt` |
-| Browser camera not prompting | Use Chrome/Edge; open external browser; check site permissions & OS privacy settings |
-| Browser camera still blank | Use OpenCV button or run `scripts/camera_predict.py` |
-| `best_efficientnet_b0.pth` not found | Place model weight file in `models/` or retrain |
-| Slow predictions | Reduce image size or batch frequency (adjust camera script) |
-| DB not updating | Check console for exceptions; confirm `process_and_insert` call |
-
----
-## ✅ Completed Tasks
-* Dataset preparation & cleaning  
-* EDA & visualization  
-* Preprocessing pipeline  
-* CNN transfer learning & evaluation  
-* Upload prediction feature  
-* Browser camera + OpenCV fallback capture  
-* Streamlit dashboard integration  
-* Database storage integration  
-* Stand‑alone live video prediction script  
-
----
-## 📌 Next Possible Enhancements
-* GPU inference toggle in dashboard
-* Batch reprocessing / backfill script
-* Export to CSV / PDF reports
-* streamlit-webrtc continuous stream component
-* Dockerfile for reproducible deployment
-
----
-## 🪪 License
-Add a LICENSE file if distributing publicly.
+## � Possible Next
+- GPU inference toggle
+- Batch reprocess script
+- Docker image
 
 ---
 ## 🙌 Acknowledgements
 * PyTorch & TorchVision
 * Streamlit
 * OpenCV community
-
----
-Feel free to open issues / requests for additional features.
