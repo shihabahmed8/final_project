@@ -1,0 +1,24 @@
+# Core numerical & data packages
+numpy
+pandas
+
+# Machine Learning / Deep Learning
+torch
+torchvision
+
+# Image processing
+pillow
+opencv-python
+
+# Web / Dashboard
+streamlit
+plotly
+
+# Utility / optional (if used later)
+scikit-learn
+
+# If you use these in notebooks for visualization
+matplotlib
+seaborn
+
+# Database (sqlite3 is stdlib, so no package)

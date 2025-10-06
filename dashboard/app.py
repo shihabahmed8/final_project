@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
+from datetime import datetime
 
 def make_df_latest(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
@@ -180,8 +181,65 @@ with st.sidebar.expander("Debug", expanded=False):
     st.caption(f"has insert_shelf? {hasattr(db_utils, 'insert_shelf')}")
 
 st.sidebar.subheader("Add a new scan")
-uploaded = st.sidebar.file_uploader("Upload JPEG/PNG", type=["jpg","jpeg","png"])
-item = st.sidebar.text_input("Item name", value="Banana").strip()
+uploaded = st.sidebar.file_uploader("Upload JPEG/PNG", type=["jpg","jpeg","png"], key="file_upl")
+item = st.sidebar.text_input("Item name", value="Banana", key="item_name").strip()
+
+# ====== Main area capture section (repositioned) ======
+st.markdown("### Capture / Camera")
+cap_col1, cap_col2, cap_col3 = st.columns([2,1,1])
+with cap_col1:
+    use_browser_cam = st.toggle("Use browser camera", value=False, help="Use Streamlit's camera widget (may need Chrome/Edge)")
+with cap_col2:
+    opencv_btn = st.button("Capture via OpenCV", help="Single frame using system camera (fallback if browser camera fails)")
+with cap_col3:
+    clear_cam = st.button("Clear capture")
+
+camera_image = None
+if use_browser_cam:
+    camera_image = st.camera_input("Take a picture", key="camera_input_main")
+
+# OpenCV fallback capture
+if opencv_btn:
+    try:
+        import cv2
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        ok, frame = cap.read()
+        cap.release()
+        if ok:
+            import cv2 as _cv2
+            _ok, buf = _cv2.imencode('.png', frame)
+            if _ok:
+                st.session_state['opencv_capture'] = buf.tobytes()
+                st.success("OpenCV frame captured.")
+            else:
+                st.error("Failed to encode frame.")
+        else:
+            st.error("Could not read from camera (OpenCV). Close other apps using the camera.")
+    except Exception as e:
+        st.error(f"OpenCV capture error: {e}")
+
+if clear_cam:
+    st.session_state.pop('opencv_capture', None)
+    st.experimental_rerun()
+
+opencv_bytes = st.session_state.get('opencv_capture')
+
+# Determine active input content in priority order: browser cam > opencv fallback > upload
+input_content = None
+input_name = None
+use_camera = False  # keep variable used later for saving flow
+if camera_image is not None:
+    input_content = camera_image.getvalue()
+    input_name = f"browsercam_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
+    use_camera = True
+elif opencv_bytes:
+    input_content = opencv_bytes
+    input_name = f"opencv_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
+    use_camera = True
+elif uploaded is not None:
+    input_content = uploaded.read()
+    input_name = uploaded.name
+
 
 # --- Step 3: sidebar controls (TTA + Top-K) ---
 use_tta = st.sidebar.checkbox("Use TTA (flip)", value=False)
@@ -213,8 +271,24 @@ def save_uploaded(file, item_name):
 
 
 
-if uploaded and item:
-    out_path, content = save_uploaded(uploaded, item)
+if input_content and item:
+    # If camera (browser or opencv), save deterministic name
+    if use_camera:
+        data_dir = BASE / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        h = hashlib.sha1(input_content).hexdigest()[:12]
+        ext = ".png"
+        out_path = data_dir / f"{item}_{h}{ext}"
+        with open(out_path, "wb") as f:
+            f.write(input_content)
+        content = input_content
+    else:
+        if uploaded is not None:
+            uploaded.seek(0)
+            out_path, content = save_uploaded(uploaded, item)
+        else:
+            content = None
+            out_path = None
 
     
     with st.spinner("Running prediction…"):
